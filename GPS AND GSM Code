@@ -1,0 +1,334 @@
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+SoftwareSerial GPRS(7,8);
+double lati,longi;
+byte button=2,buttonState=0;
+byte x=0;int count=0,ContinuousTransmission=0;
+unsigned long current,startgsm=0;
+String guardnum="+918884446085";
+String IP="18.218.173.79";char num[11],num1[11];
+char Time[25],data[80],HTTPACTION[4];int pos=0;bool start=0,end=0;
+bool LocationLock=0;
+// The TinyGPS++ object
+TinyGPSPlus gps;
+// The serial connection to the GPS device
+SoftwareSerial GPS(10,11);//GPS RX=10 and tx=11
+void sendGSM(const char* msg,int waitMs = 500,int ReadHttp=0,int SetIp=0,int
+GET=0) {
+ if(GET==1)
+ {
+ GPRS.println(msg);
+ delay(waitMs);
+ while(GPRS.available())
+ {
+ x=GPRS.read();
+ Serial.write(x);
+ ParseHttp(x);
+ }
+ }
+ if(SetIp==1)
+ {
+ GPRS.print("AT+HTTPPARA=URL,http://"+IP+":8080/new_coords?
+time="+Time+"&number=9945000008&lat=");
+ GPRS.print(lati,6);
+ //GPRS.print("15.997000");
+ //GPRS.println("&long=87.60800");
+ GPRS.print("&long=");
+ GPRS.println(longi,6);
+ //GPRS.println("AT+HTTPPARA=\"URL\",\"http://www.iforce2d.net/test.php\"");
+ //GPRS.println("AT+HTTPPARA=URL,http://3.19.14.212:8080/new_coords?
+time=2019-05-03T08:47:05Z&number=9945000008&lat=12.997347&long=77.60848
+9");
+ delay(waitMs);
+ while(GPRS.available()) {
+ Serial.write(GPRS.read());
+ }
+ }
+ else
+ {
+ GPRS.println(msg);
+ delay(waitMs);
+ if(ReadHttp==1)
+ {
+ while(GPRS.available())
+ {
+ x=GPRS.read();
+ ParseHttp(x);
+ }
+ }
+ else
+ {
+ while(GPRS.available()) {
+ Serial.write(GPRS.read());
+ }
+ }
+ }
+}
+void ParseHttp(byte b)
+{
+ data[pos++]=b;
+ if ( pos >= sizeof(data) )
+ reset();
+
+ if ( b == '\n' )
+ reset();
+ else{
+ if(pos==3 && (!strcmp(data,"AT+")))
+ reset();
+ if(pos==11 && (!strcmp(data,"+HTTPREAD: ")))
+ {
+ reset();
+ for(int i=0;i<26;i++)
+ {
+ x=GPRS.read();
+ //Serial.write(x);
+ //Serial.println();
+ delay(50);
+ if(i>3)
+ {
+ if(x==',')
+ {
+ if(count==0)
+ strcat(num,data);
+ else
+ strcat(num1,data);
+ count++;
+ reset();
+ continue;
+ }
+ data[pos++]=x;
+ }
+ }
+ Serial.print("NUMBEr1=");
+ Serial.println(num);
+ Serial.println(strlen(num));
+ Serial.print("number2=");
+ Serial.println(num1);
+ Serial.println(strlen(num1));
+ reset();
+ }
+ if(pos==15 && (!strcmp(data,"+HTTPACTION: 0,")))
+ {
+ reset();
+ while(1){
+ x=GPRS.read();
+ delay(50);
+ if(x==',')
+ {
+ for(int i=0;i<pos;i++)
+ HTTPACTION[i]=data[i];
+ break;
+ }
+ data[pos++]=x;
+ }
+ Serial.print("HTTPACTION==");
+ Serial.println(HTTPACTION);
+ if((!strcmp(HTTPACTION,"601")))
+ {
+ Serial.print("NETWORK ERROR");
+ InitHttp();
+ sendGSM("AT+HTTPACTION=0",500,0,0,1);
+ }
+ reset();
+ }
+ if(pos==5 && (!strcmp(data,"ERROR")))
+ {
+ Serial.println("ERROR");
+ InitHttp();
+ sendGSM("AT+HTTPACTION=0",500,0,0,1);
+ }
+}
+}
+void InitHttp()
+{
+ sendGSM("AT+SAPBR=3,1,\"APN\",\"airtelgprs.com\""); //set the apn
+ sendGSM("AT+SAPBR=3,1,Contype,GPRS");//set the connection type
+ sendGSM("AT+SAPBR=1,1",3000);//begin bearer connection
+ sendGSM("AT+HTTPINIT"); 
+ sendGSM("AT+HTTPPARA=\"CID\",1");
+}
+void setup()
+{
+ pinMode(button,INPUT);//button as input
+ Serial.begin(9600);
+ GPRS.begin(9600);
+ InitHttp();
+ delay(100);
+ GPS.begin(9600);
+ delay(100);
+}
+void loop()
+{
+ buttonState=digitalRead(button);
+ /*while(GPRS.available())
+ {
+ Serial.write(GPRS.read());
+ }
+ while(Serial.available())
+ {
+ GPRS.write(Serial.read());
+ }*/
+ if(buttonState==HIGH)
+ {
+ while(LocationLock==0)
+ {
+ GPSinfo();
+ if(LocationLock==1)
+ {
+ GPRS.listen();
+ CheckTime();
+ Serial.println("TIME=");
+ Serial.print(Time);
+ sendGSM("",500,0,1);//setting url
+ sendGSM("AT+HTTPACTION=0",2500,0,0,1);
+ sendGSM("AT+HTTPREAD",500,1);
+ delay(10000);
+ sendSMS(guardnum,1,10);
+ delay(2000);
+ //sendSMS(num,0,strlen(num));
+ ContinuousTransmission=1;
+ }
+ }
+ if(ContinuousTransmission==1)
+ {
+ startgsm=millis();
+ while(1)
+ {
+ buttonState=digitalRead(button);
+ GPS.listen();
+ delay(50);
+ GPSinfo();
+ if(buttonState==HIGH)
+ {
+ Serial.println("STOPPING TRANSMISSION");
+ ContinuousTransmission=0;
+ break;
+ }
+ current=millis();
+ if(current-startgsm>=9000)
+ {
+ GPRS.listen();
+ delay(50);
+ CheckTime();
+ Serial.println("TIME=");
+ Serial.print(Time);
+ sendGSM("",500,0,1);
+ Serial.println("SENDING SERVER");
+ sendGSM("AT+HTTPACTION=0",2500,0,0,1);
+ startgsm=current;
+ }
+ }
+ }
+}
+}
+void GPSinfo()
+{
+ //Serial.println("GPS");
+ while (GPS.available() && LocationLock==0)
+ {
+ if (gps.encode(GPS.read()))
+ {
+ Serial.print(F("Location: "));
+ if (gps.location.isValid())
+ {
+ lati=(gps.location.lat());
+ longi=(gps.location.lng());
+ Serial.print(lati,6);
+ Serial.print(",");
+ Serial.print(longi,6);
+ LocationLock=1;
+ }
+ else
+ {
+ Serial.print(F("INVALID"));
+ }
+ Serial.println();
+ }
+ }
+}
+void CheckTime()
+{
+ GPRS.println("AT+CCLK?");
+ delay(50);
+ while(end==0)
+ {
+ x=GPRS.read();
+ data[pos++]=x;
+ if(pos==7 && (!strcmp(data,"+CCLK: ")))
+ reset();
+ if(x=='"')
+ {
+ start=1;
+ reset();
+ data[pos++]='2';
+ data[pos++]='0';
+ }
+ if(start==1)
+ {
+ while(1)
+ {
+ x=GPRS.read();
+ if(x=='+')
+ break;
+ if(x=='/')
+ {
+ data[pos++]='-';
+ continue;
+ }
+ if(x==',')
+ {
+ data[pos++]='T';
+ continue;
+ }
+ data[pos++]=x;
+ }
+ end=1;
+ }
+ }
+ data[pos++]='Z';
+ for(int i=0;i<pos;i++)
+ Time[i]=data[i];
+ reset();
+ end=0;
+ start=0;
+ Serial.print("TIME=");
+ Serial.println(Time);
+}
+void reset()
+{
+ memset(data,0,sizeof(data));
+ pos=0;
+}
+void sendSMS(String number,int guardian,int NumLen) {
+ if(guardian==1)
+ {
+ Serial.println("SENDING GUARDIAN MESSAGE");
+ GPRS.println("AT+CMGF=1");//put into sms mode
+ delay(100);
+ GPRS.println("AT+CMGS=\"" + number + "\"\r");//command to
+ delay(300);
+ GPRS.println("YOUR DEVICE HAS BEEN TRIGGERED. FOLLOW LINK
+BELOW.");
+ GPRS.print("http://maps.google.com/maps?q=");
+ GPRS.print(lati);
+ GPRS.print(",");
+ GPRS.print(longi);
+ GPRS.write( char(26) ); // ctrl+Z character
+ delay(3000);
+ }
+ if(guardian==0 && (NumLen!=0))
+ {
+ Serial.println("SENDING STRANGER MESSAGE");
+ GPRS.println("AT+CMGF=1");
+ delay(100);
+ GPRS.println("AT+CMGS=\"" + number + "\"\r");
+ delay(300);
+ GPRS.println("HELP SOMEONE IN TROUBLE NEAR YOU");
+ GPRS.print("http://maps.google.com/maps?q=");
+ GPRS.print(lati);
+ GPRS.print(",");
+ GPRS.print(longi);
+ GPRS.write( char(26) ); // ctrl+Z character
+ delay(3000);
+ }
+}
