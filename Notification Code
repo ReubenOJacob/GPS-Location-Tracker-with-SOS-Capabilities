@@ -1,0 +1,153 @@
+#include <SoftwareSerial.h>
+SoftwareSerial GPRS(7, 8); // RX, TX
+const byte buzzer = 9; //buzzer to arduino pin 9
+const byte motor=6;
+byte button=2,buttonState=0;
+void buzz();
+char data[80];
+int pos=0;
+int counter=0;
+byte x;
+byte cmgr=0,cmgrDATA=0;
+byte cmti=0,cmtiDATA=0;
+void setup()
+{
+ pinMode(button,INPUT);//button as input
+ pinMode( motor , OUTPUT); // Must be a PWM pin
+ pinMode(buzzer, OUTPUT);
+ pinMode(13,OUTPUT);
+ GPRS.begin(9600);
+ Serial.begin(9600);
+ GPRS.println("AT+CMGF=1");//put in sms
+ delay(1000);
+ for(int i=1;i<10;i++)
+ {
+ GPRS.print("AT+CMGD=");//deleting message slots
+ GPRS.println(i);
+ delay(100);
+ }
+ Serial.println("START SENDING MESSAGES");//wait for this message to pop
+}
+
+
+
+
+void loop()
+{
+ while(Serial.available())
+ {
+ GPRS.write(Serial.read());
+ }
+ while(GPRS.available()&&cmtiDATA==0 && cmgrDATA==0)
+ {
+ x=GPRS.read();
+ Serial.write(x);
+ parse(x);
+ }
+ while(cmtiDATA==1)
+ {
+ cmtiDATA=0;
+ GPRS.print("AT+CMGR=");//read message in slot
+ GPRS.println(data);
+ }
+ while(cmgrDATA==1)
+ {
+ data[pos-1]='\0';
+ pos-=1;
+ if(pos==2 && (!strcmp(data,"ON")))
+ {
+ buzz();
+ reset();
+ }
+ else if(pos==3 && (!strcmp(data,"OFF")))
+ digitalWrite(13,LOW);
+ cmgrDATA=0;
+ reset();
+ GPRS.println("AT+CMGD=1");
+ }
+}
+void parse(byte x)
+{
+ data[pos++]=x;
+ if(x=='\n')
+ {
+ reset();
+ if(cmgr==1)
+ {
+ while(GPRS.available())
+ {
+ x=GPRS.read();
+ delay(10);
+ if(x=='\n')
+ break;
+ if(x==' ')
+ break;
+ data[pos++]=x;
+ }
+ cmgr=0;
+ cmgrDATA=1;
+ }
+ }
+ else
+ {
+ if(pos==3 && (!strcmp(data,"AT+")))
+ reset();
+ if(pos==7 && (!strcmp(data,"+CMTI: ")))
+ {
+ cmti=1;
+ reset();
+ }
+ if(pos==7 && (!strcmp(data,"+CMGR: ")))
+ {
+ reset();
+ counter=0;
+ while(counter<8)
+ {
+ x=GPRS.read();
+ delay(10);
+ if(((char)x)=='"')
+ counter+=1;
+ }
+ delay(10);
+ cmgr=1;
+ }
+ if(pos==2 && (!strcmp(data,"SM")))
+ reset();
+ if(pos==1 && data[pos-1]=='"')
+ reset();
+ if(pos==1 && data[pos-1]==',')
+ {
+ reset();
+ if(cmti==1)
+ {
+ delay(10);
+ x=GPRS.read();
+ data[pos++]=x;
+ cmtiDATA=1;
+ cmti=0;
+ }
+ }
+ }
+}
+void reset()
+{
+ memset(data,0,sizeof(data));
+ pos=0;
+}
+void buzz()
+{
+ tone(buzzer, 1000); // Send 1KHz sound signal...
+ while(1)
+ {
+ buttonState=digitalRead(button);
+ 
+}if(buttonState==HIGH)
+ {
+ analogWrite( motor, 0 );
+ Serial.println("BREAKING");
+ noTone(buzzer);
+ break;
+ }
+ analogWrite( motor, 153 ); // 60% duty cycle
+ delay(500); // play for 0.5s
+ }
